@@ -47,38 +47,79 @@ CREATE TABLE IF NOT EXISTS compra_items (
   FOREIGN KEY (producto_id) REFERENCES productos(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS menus (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  nombre VARCHAR(120) NOT NULL,
-  tipo VARCHAR(30) NOT NULL DEFAULT '',
-  descripcion TEXT,
-  activo TINYINT(1) NOT NULL DEFAULT 1,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS sistema (
+  clave VARCHAR(40) PRIMARY KEY,
+  valor VARCHAR(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS menu_items (
+CREATE TABLE IF NOT EXISTS contingentes (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  menu_id INT NOT NULL,
+  numero VARCHAR(30) NOT NULL,
+  fecha_llegada DATE NOT NULL,
+  dias INT NOT NULL,
+  fecha_salida DATE NOT NULL,
+  personas INT NOT NULL,
+  observaciones VARCHAR(255) NOT NULL DEFAULT '',
+  cancelado TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX (fecha_llegada),
+  INDEX (fecha_salida),
+  INDEX (numero)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(150) NOT NULL,
+  categoria VARCHAR(30) NOT NULL DEFAULT 'Principal',
+  descripcion VARCHAR(255) NOT NULL DEFAULT '',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX (nombre)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS plato_items (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  plato_id INT NOT NULL,
   producto_id INT NOT NULL,
   cantidad_por_persona DECIMAL(14,4) NOT NULL,
-  UNIQUE KEY menu_producto (menu_id, producto_id),
-  FOREIGN KEY (menu_id) REFERENCES menus(id) ON DELETE CASCADE,
+  UNIQUE KEY plato_producto (plato_id, producto_id),
+  FOREIGN KEY (plato_id) REFERENCES platos(id) ON DELETE CASCADE,
   FOREIGN KEY (producto_id) REFERENCES productos(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- dia = 1..10 del ciclo; dia = 0 significa "todos los dias" (ej: desayuno fijo)
+CREATE TABLE IF NOT EXISTS menu_ciclo (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  dia TINYINT NOT NULL,
+  servicio VARCHAR(20) NOT NULL,
+  plato_id INT NOT NULL,
+  orden INT NOT NULL DEFAULT 0,
+  UNIQUE KEY dia_servicio_plato (dia, servicio, plato_id),
+  FOREIGN KEY (plato_id) REFERENCES platos(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS servicios (
   id INT AUTO_INCREMENT PRIMARY KEY,
   fecha DATE NOT NULL,
-  menu_id INT NULL,
-  menu_nombre VARCHAR(120) NOT NULL,
+  servicio VARCHAR(20) NULL,
+  dia_menu TINYINT NULL,
+  menu_nombre VARCHAR(255) NOT NULL,
   comensales INT NOT NULL,
   costo_total DECIMAL(14,2) NOT NULL DEFAULT 0,
   observaciones VARCHAR(255) NOT NULL DEFAULT '',
   usuario_id INT NULL,
   anulado TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  INDEX (fecha),
-  FOREIGN KEY (menu_id) REFERENCES menus(id) ON DELETE SET NULL
+  INDEX (fecha)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS servicio_contingentes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  servicio_id INT NOT NULL,
+  contingente_id INT NOT NULL,
+  personas INT NOT NULL,
+  FOREIGN KEY (servicio_id) REFERENCES servicios(id) ON DELETE CASCADE,
+  FOREIGN KEY (contingente_id) REFERENCES contingentes(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS servicio_items (

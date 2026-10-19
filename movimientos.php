@@ -88,7 +88,7 @@ require __DIR__ . '/inc/header.php';
         <thead><tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th class="num">Cantidad</th><th class="num">Stock después</th><th>Detalle</th><th>Usuario</th></tr></thead>
         <tbody>
         <?php foreach ($movs as $m):
-            $link = $m['ref_tipo'] === 'compra' ? 'compras.php?ver=' . (int)$m['ref_id'] : ($m['ref_tipo'] === 'servicio' ? 'cocinar.php#s' . (int)$m['ref_id'] : ''); ?>
+            $link = $m['ref_tipo'] === 'compra' ? 'compras.php?ver=' . (int)$m['ref_id'] : ''; ?>
             <tr>
                 <td class="nowrap"><?= fecha_ar($m['created_at']) ?></td>
                 <td><?= e($m['nombre']) ?></td>

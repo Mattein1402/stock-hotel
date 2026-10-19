@@ -14,6 +14,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cat = trim($_POST['categoria'] ?? '');
         $unidad = in_array($_POST['unidad'] ?? '', UNIDADES, true) ? $_POST['unidad'] : 'unidad';
         $min = dec_in($_POST['stock_minimo'] ?? 0);
+        $peso = dec_in($_POST['peso_unidad'] ?? 0);
+        $peso = $peso > 0 ? $peso : null;
         $activo = isset($_POST['activo']) ? 1 : 0;
 
         if ($nombre === '') {
@@ -23,17 +25,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $pdo->beginTransaction();
             if ($id) {
-                $pdo->prepare('UPDATE productos SET nombre=?, categoria=?, unidad=?, stock_minimo=?, activo=? WHERE id=?')
-                    ->execute([$nombre, $cat, $unidad, $min, $activo, $id]);
+                $pdo->prepare('UPDATE productos SET nombre=?, categoria=?, unidad=?, stock_minimo=?, peso_unidad=?, activo=? WHERE id=?')
+                    ->execute([$nombre, $cat, $unidad, $min, $peso, $activo, $id]);
+                // Recalcula las recetas que usan este producto (por si cambió la unidad o el peso)
+                $st = $pdo->prepare('SELECT id, cantidad_receta, unidad_receta FROM plato_items WHERE producto_id = ? AND unidad_receta IS NOT NULL');
+                $st->execute([$id]);
+                $upd = $pdo->prepare('UPDATE plato_items SET cantidad_por_persona = ? WHERE id = ?');
+                $sinConv = 0;
+                foreach ($st->fetchAll() as $it) {
+                    $conv = convertir_producto((float)$it['cantidad_receta'], $it['unidad_receta'], $unidad, $peso);
+                    if ($conv === null) { $sinConv++; $conv = 0; }
+                    $upd->execute([round($conv, 6), $it['id']]);
+                }
+                if ($sinConv) flash($sinConv . ' receta(s) usan este producto en una unidad que no se puede convertir. Cargá el peso de 1 unidad.', 'warn');
             } else {
-                $pdo->prepare('INSERT INTO productos (nombre, categoria, unidad, stock_minimo, costo_promedio, activo) VALUES (?,?,?,?,?,?)')
-                    ->execute([$nombre, $cat, $unidad, $min, dec_in($_POST['costo'] ?? 0), $activo]);
+                $pdo->prepare('INSERT INTO productos (nombre, categoria, unidad, stock_minimo, costo_promedio, peso_unidad, activo) VALUES (?,?,?,?,?,?,?)')
+                    ->execute([$nombre, $cat, $unidad, $min, dec_in($_POST['costo'] ?? 0), $peso, $activo]);
                 $id = (int)$pdo->lastInsertId();
                 $ini = dec_in($_POST['stock_inicial'] ?? 0);
                 if ($ini != 0) mover_stock($pdo, $id, $ini, 'ajuste', null, null, 'Stock inicial');
             }
             $pdo->commit();
             flash('Producto guardado.');
+        } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            flash('Error: ' . $ex->getMessage(), 'error');
+        }
+        redirect('productos.php');
+    }
+
+    if ($acc === 'reiniciar') {
+        $conts = $pdo->query('SELECT COUNT(DISTINCT sc.contingente_id) FROM servicio_contingentes sc JOIN servicios s ON s.id = sc.servicio_id WHERE s.anulado = 0')->fetchColumn();
+        if ($conts && empty($_POST['borrar_contingentes'])) {
+            flash('Hay contingentes confirmados que ya descontaron stock. Tildá «Eliminar también los contingentes cargados» para hacerlo.', 'error');
+            redirect('productos.php#reiniciar');
+        }
+        try {
+            $pdo->beginTransaction();
+            $nc = 0;
+            if (!empty($_POST['borrar_contingentes'])) {
+                foreach ($pdo->query('SELECT id FROM contingentes')->fetchAll(PDO::FETCH_COLUMN) as $cid) {
+                    deshacer_consumo($pdo, (int)$cid, true);
+                    $pdo->prepare('DELETE FROM contingentes WHERE id = ?')->execute([$cid]);
+                    $nc++;
+                }
+            }
+            $n = 0;
+            foreach ($pdo->query('SELECT id, stock FROM productos WHERE stock <> 0 FOR UPDATE')->fetchAll() as $p) {
+                mover_stock($pdo, (int)$p['id'], -(float)$p['stock'], 'ajuste', null, null, 'Puesta en cero (datos de prueba)');
+                $n++;
+            }
+            if (!empty($_POST['costos'])) $pdo->exec('UPDATE productos SET costo_promedio = 0');
+            $pdo->commit();
+            flash('Listo: ' . $n . ' producto(s) quedaron con stock 0' . (!empty($_POST['costos']) ? ' y se borraron los costos' : '') . ($nc ? '. Se eliminaron ' . $nc . ' contingente(s) de prueba' : '') . '.');
         } catch (Throwable $ex) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             flash('Error: ' . $ex->getMessage(), 'error');
@@ -80,7 +124,7 @@ require __DIR__ . '/inc/header.php';
 
 /* ----- Formulario alta / edición ----- */
 if (($editar || $nuevo) && es_admin()):
-    $p = ['id' => 0, 'nombre' => '', 'categoria' => '', 'unidad' => 'kg', 'stock_minimo' => 0, 'activo' => 1];
+    $p = ['id' => 0, 'nombre' => '', 'categoria' => '', 'unidad' => 'kg', 'stock_minimo' => 0, 'peso_unidad' => null, 'activo' => 1];
     if ($editar) {
         $st = $pdo->prepare('SELECT * FROM productos WHERE id=?');
         $st->execute([$editar]);
@@ -109,6 +153,10 @@ if (($editar || $nuevo) && es_admin()):
             <label>Costo unitario $<input name="costo" inputmode="decimal" placeholder="0,00"></label>
         <?php endif; ?>
     </div>
+    <label>Peso o contenido de 1 unidad, en g o ml (opcional)
+        <input name="peso_unidad" inputmode="decimal" value="<?= $p['peso_unidad'] ? num_input($p['peso_unidad']) : '' ?>" placeholder="Ej: cebolla 150 · lata de durazno 500 · caja de helado 12000">
+    </label>
+    <p class="muted small" style="margin-top:-.5rem">Sirve para que las recetas puedan usar otra unidad: si el producto se compra por kg pero la receta dice «1/2 cebolla», o se compra por lata y la receta dice «50 g».</p>
     <?php if ($p['id']): ?><p class="muted small">El stock no se edita acá: se mueve con compras, servicios o «Ajustar».</p><?php endif; ?>
     <label class="check"><input type="checkbox" name="activo" value="1" <?= $p['activo'] ? 'checked' : '' ?>> Producto activo</label>
     <div class="acciones"><span class="spacer"></span><a class="btn sec" href="productos.php">Cancelar</a><button class="btn">Guardar</button></div>
@@ -159,7 +207,7 @@ else:
     $params = [];
     if ($q !== '') { $where[] = 'nombre LIKE ?'; $params[] = "%$q%"; }
     if ($cat !== '') { $where[] = 'categoria = ?'; $params[] = $cat; }
-    if ($bajo) $where[] = 'stock <= stock_minimo';
+    if ($bajo) $where[] = '((stock_minimo > 0 AND stock <= stock_minimo) OR stock < 0)';
     if (!$inactivos) $where[] = 'activo = 1';
     $st = $pdo->prepare('SELECT * FROM productos WHERE ' . implode(' AND ', $where) . ' ORDER BY categoria, nombre');
     $st->execute($params);
@@ -177,6 +225,23 @@ else:
     <label class="check"><input type="checkbox" name="inactivos" value="1" <?= $inactivos ? 'checked' : '' ?>> Ver inactivos</label>
     <button class="btn sec">Filtrar</button>
 </form>
+<?php if (es_admin()):
+    $conStock = (int)$pdo->query('SELECT COUNT(*) FROM productos WHERE stock <> 0')->fetchColumn();
+    $contsConf = $pdo->query('SELECT DISTINCT c.numero FROM contingentes c JOIN servicio_contingentes sc ON sc.contingente_id = c.id JOIN servicios s ON s.id = sc.servicio_id WHERE s.anulado = 0')->fetchAll(PDO::FETCH_COLUMN); ?>
+<details class="card" id="reiniciar">
+    <summary><strong>Poner todo el stock en cero</strong> <span class="muted small">— para borrar datos de prueba antes de empezar a usar el sistema</span></summary>
+    <form method="post" style="margin-top:.8rem" data-confirm="¿Poner TODO el stock en cero? Esto no se puede deshacer automáticamente.">
+        <?= csrf_field() ?><input type="hidden" name="accion" value="reiniciar">
+        <p class="small">Deja los <?= $conStock ?> producto(s) que tienen stock en 0. Queda registrado en Movimientos como ajuste. Los productos y las recetas no se borran.</p>
+        <label class="check"><input type="checkbox" name="costos" value="1" checked> Borrar también los costos (eran de prueba)</label>
+        <?php if ($contsConf): ?>
+            <div class="flash warn">Hay contingentes confirmados que ya descontaron stock: N° <?= e(implode(', N° ', $contsConf)) ?>.</div>
+            <label class="check"><input type="checkbox" name="borrar_contingentes" value="1" required> Eliminar también los contingentes cargados (eran de prueba). Después los volvés a cargar.</label>
+        <?php endif; ?>
+        <button class="btn peligro">Poner todo el stock en cero</button>
+    </form>
+</details>
+<?php endif; ?>
 <div class="card">
     <div class="scroll">
     <table class="tabla">
@@ -185,7 +250,7 @@ else:
         <?php foreach ($productos as $p):
             $valor = max((float)$p['stock'], 0) * (float)$p['costo_promedio'];
             $valorTotal += $valor;
-            $cls = $p['stock'] < 0 ? 'b-err' : ($p['stock'] <= $p['stock_minimo'] ? 'b-warn' : 'b-ok'); ?>
+            $cls = $p['stock'] < 0 ? 'b-err' : ($p['stock_minimo'] > 0 && $p['stock'] <= $p['stock_minimo'] ? 'b-warn' : 'b-ok'); ?>
             <tr class="<?= $p['activo'] ? '' : 'anulado' ?>">
                 <td><strong><?= e($p['nombre']) ?></strong></td>
                 <td><?= e($p['categoria']) ?></td>

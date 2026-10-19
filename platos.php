@@ -15,12 +15,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $desc = trim($_POST['descripcion'] ?? '');
         $activo = isset($_POST['activo']) ? 1 : 0;
 
-        // Ingredientes (si un producto se repite, se suman las cantidades)
+        // Ingredientes: cantidad en la unidad que quieran; se convierte a la unidad del producto.
+        // Si un producto se repite, se suman las cantidades.
+        $prods = [];
+        foreach ($pdo->query('SELECT id, nombre, unidad, peso_unidad FROM productos') as $pr) $prods[(int)$pr['id']] = $pr;
         $receta = [];
+        $sinConvertir = [];
         foreach ((array)($_POST['producto_id'] ?? []) as $i => $pid) {
             $pid = (int)$pid;
             $cant = dec_in($_POST['cantidad'][$i] ?? 0);
-            if ($pid > 0 && $cant > 0) $receta[$pid] = ($receta[$pid] ?? 0) + $cant;
+            if ($pid <= 0 || $cant <= 0 || !isset($prods[$pid])) continue;
+            $pr = $prods[$pid];
+            $uni = (string)($_POST['unidad'][$i] ?? $pr['unidad']);
+            if (!in_array($uni, unidades_receta($pr['unidad']), true)) $uni = $pr['unidad'];
+            $conv = convertir_producto($cant, $uni, $pr['unidad'], $pr['peso_unidad'] !== null ? (float)$pr['peso_unidad'] : null);
+            if ($conv === null) {
+                $sinConvertir[] = $pr['nombre'] . ' (' . num($cant, 4) . ' ' . $uni . ' → ' . $pr['unidad'] . ')';
+                $conv = 0;
+            }
+            if (isset($receta[$pid])) {
+                // repetido: se suma en la unidad del producto
+                $receta[$pid]['conv'] += $conv;
+                $receta[$pid]['cant'] = $receta[$pid]['conv'];
+                $receta[$pid]['uni'] = $pr['unidad'];
+            } else {
+                $receta[$pid] = ['conv' => $conv, 'cant' => $cant, 'uni' => $uni];
+            }
         }
         if ($nombre === '') {
             flash('El nombre del plato es obligatorio.', 'error');
@@ -35,10 +55,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('INSERT INTO platos (nombre, categoria, descripcion, activo) VALUES (?,?,?,?)')->execute([$nombre, $cat, mb_substr($desc, 0, 255), $activo]);
                 $id = (int)$pdo->lastInsertId();
             }
-            $ins = $pdo->prepare('INSERT INTO plato_items (plato_id, producto_id, cantidad_por_persona) VALUES (?,?,?)');
-            foreach ($receta as $pid => $cant) $ins->execute([$id, $pid, round($cant, 4)]);
+            $ins = $pdo->prepare('INSERT INTO plato_items (plato_id, producto_id, cantidad_por_persona, cantidad_receta, unidad_receta) VALUES (?,?,?,?,?)');
+            foreach ($receta as $pid => $r) $ins->execute([$id, $pid, round($r['conv'], 6), $r['cant'], $r['uni']]);
             $pdo->commit();
             flash('Plato «' . $nombre . '» guardado.' . ($receta ? '' : ' Ojo: no tiene ingredientes cargados.'), $receta ? 'ok' : 'warn');
+            if ($sinConvertir) {
+                flash('No se pudo convertir: ' . implode(', ', $sinConvertir) . '. Para pasar de unidades a kilos (o al revés) cargá en el producto cuánto pesa 1 unidad. Mientras tanto esos ingredientes no descuentan.', 'error');
+            }
         } catch (Throwable $ex) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             flash('Error al guardar: ' . $ex->getMessage(), 'error');
@@ -52,7 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->beginTransaction();
         $pdo->prepare("INSERT INTO platos (nombre, categoria, descripcion, activo) SELECT CONCAT(nombre, ' (copia)'), categoria, descripcion, activo FROM platos WHERE id=?")->execute([$id]);
         $nuevo = (int)$pdo->lastInsertId();
-        $pdo->prepare('INSERT INTO plato_items (plato_id, producto_id, cantidad_por_persona) SELECT ?, producto_id, cantidad_por_persona FROM plato_items WHERE plato_id=?')->execute([$nuevo, $id]);
+        $pdo->prepare('INSERT INTO plato_items (plato_id, producto_id, cantidad_por_persona, cantidad_receta, unidad_receta) SELECT ?, producto_id, cantidad_por_persona, cantidad_receta, unidad_receta FROM plato_items WHERE plato_id=?')->execute([$nuevo, $id]);
         $pdo->commit();
         flash('Plato duplicado. Editá la copia.');
         redirect("platos.php?editar=$nuevo");
@@ -85,11 +108,11 @@ if (($editar || $nuevo) && es_admin()):
         $st->execute([$editar]);
         $plato = $st->fetch();
         if (!$plato) redirect('platos.php');
-        $st = $pdo->prepare('SELECT pi.*, p.unidad FROM plato_items pi JOIN productos p ON p.id = pi.producto_id WHERE plato_id=? ORDER BY p.nombre');
+        $st = $pdo->prepare('SELECT pi.*, p.unidad, p.peso_unidad FROM plato_items pi JOIN productos p ON p.id = pi.producto_id WHERE plato_id=? ORDER BY p.nombre');
         $st->execute([$editar]);
         $receta = $st->fetchAll();
     }
-    if (!$receta) $receta = [['producto_id' => 0, 'cantidad_por_persona' => '', 'unidad' => '']];
+    if (!$receta) $receta = [['producto_id' => 0, 'cantidad_por_persona' => '', 'cantidad_receta' => '', 'unidad_receta' => '', 'unidad' => '']];
 ?>
 <h1><?= $plato['id'] ? 'Receta: ' . e($plato['nombre']) : 'Nuevo plato' ?></h1>
 <?php if (!empty($usos[$plato['id']])): ?><p class="muted">En el menú: <?= e(implode(' · ', $usos[$plato['id']])) ?></p><?php endif; ?>
@@ -110,15 +133,18 @@ if (($editar || $nuevo) && es_admin()):
     <label class="check"><input type="checkbox" name="activo" value="1" <?= $plato['activo'] ? 'checked' : '' ?>> Plato activo</label>
 
     <h2>Ingredientes para UNA persona</h2>
-    <p class="muted">Cantidad en la unidad del producto. Ej: 250 g de pollo → <strong>0,25</strong> kg · 2 huevos → <strong>2</strong> unidad · 20 ml de aceite → <strong>0,02</strong> l.</p>
-    <table class="tabla tabla-form">
-        <thead><tr><th>Producto</th><th style="width:150px">Cantidad x persona</th><th style="width:70px">Unidad</th><th style="width:44px"></th></tr></thead>
+    <p class="muted">Escribí la cantidad como está en la ficha y elegí la unidad: <strong>350 g</strong>, <strong>200 ml</strong>, <strong>1/2 unidad</strong> (poné 0,5), <strong>1 cucharada</strong>… El sistema la pasa sola a la unidad en que se guarda el stock.</p>
+    <table class="tabla tabla-form tabla-receta">
+        <thead><tr><th>Producto</th><th style="width:120px">Cantidad</th><th style="width:130px">Unidad</th><th style="width:150px">En stock se descuenta</th><th style="width:44px"></th></tr></thead>
         <tbody id="filas-receta">
-        <?php foreach ($receta as $r): ?>
+        <?php foreach ($receta as $r):
+            $uRec = $r['unidad_receta'] ?: $r['unidad'];
+            $cRec = $r['cantidad_receta'] !== null && $r['cantidad_receta'] !== '' ? $r['cantidad_receta'] : $r['cantidad_por_persona']; ?>
             <tr>
                 <td><select name="producto_id[]" class="sel-producto"><?= opciones_productos($pdo, $r['producto_id']) ?></select></td>
-                <td><input name="cantidad[]" inputmode="decimal" value="<?= $r['cantidad_por_persona'] !== '' ? num_input($r['cantidad_por_persona']) : '' ?>" placeholder="0,25"></td>
-                <td class="unidad muted"><?= e($r['unidad']) ?></td>
+                <td><input name="cantidad[]" inputmode="decimal" value="<?= $cRec !== '' ? num_input($cRec) : '' ?>" placeholder="350" data-cant></td>
+                <td><select name="unidad[]" class="sel-unidad" data-actual="<?= e($uRec) ?>"><?= opciones_unidades($r['unidad'] ?: 'unidad', $uRec) ?></select></td>
+                <td class="conv small muted"></td>
                 <td><button type="button" class="btn-x" data-del-row title="Quitar">✕</button></td>
             </tr>
         <?php endforeach; ?>
@@ -127,8 +153,9 @@ if (($editar || $nuevo) && es_admin()):
     <template id="tpl-receta">
         <tr>
             <td><select name="producto_id[]" class="sel-producto"><?= opciones_productos($pdo) ?></select></td>
-            <td><input name="cantidad[]" inputmode="decimal" placeholder="0,25"></td>
-            <td class="unidad muted"></td>
+            <td><input name="cantidad[]" inputmode="decimal" placeholder="350" data-cant></td>
+            <td><select name="unidad[]" class="sel-unidad"><?= opciones_unidades('unidad', 'unidad') ?></select></td>
+            <td class="conv small muted"></td>
             <td><button type="button" class="btn-x" data-del-row title="Quitar">✕</button></td>
         </tr>
     </template>
@@ -208,14 +235,14 @@ if (($editar || $nuevo) && es_admin()):
 <?php
     // Vista de receta de solo lectura (rol cocina)
     if (!empty($_GET['receta'])):
-        $st = $pdo->prepare('SELECT p.nombre AS plato, pr.nombre, pr.unidad, pi.cantidad_por_persona FROM plato_items pi JOIN productos pr ON pr.id = pi.producto_id JOIN platos p ON p.id = pi.plato_id WHERE pi.plato_id = ? ORDER BY pr.nombre');
+        $st = $pdo->prepare('SELECT p.nombre AS plato, pr.nombre, pr.unidad, pi.cantidad_por_persona, pi.cantidad_receta, pi.unidad_receta FROM plato_items pi JOIN productos pr ON pr.id = pi.producto_id JOIN platos p ON p.id = pi.plato_id WHERE pi.plato_id = ? ORDER BY pr.nombre');
         $st->execute([(int)$_GET['receta']]);
         $rec = $st->fetchAll();
 ?>
 <div class="card" id="receta">
     <h2>Receta x persona<?= $rec ? ': ' . e($rec[0]['plato']) : '' ?></h2>
     <?php if (!$rec): ?><p class="muted">Sin receta cargada.</p><?php else: ?>
-    <ul><?php foreach ($rec as $r): ?><li><?= e($r['nombre']) ?>: <?= num($r['cantidad_por_persona'], 4) ?> <?= e($r['unidad']) ?></li><?php endforeach; ?></ul>
+    <ul><?php foreach ($rec as $r): ?><li><?= e($r['nombre']) ?>: <?= num($r['cantidad_receta'] ?? $r['cantidad_por_persona'], 4) ?> <?= e($r['unidad_receta'] ?? $r['unidad']) ?><?= ($r['unidad_receta'] && $r['unidad_receta'] !== $r['unidad']) ? ' <span class="muted small">(= ' . num($r['cantidad_por_persona'], 4) . ' ' . e($r['unidad']) . ')</span>' : '' ?></li><?php endforeach; ?></ul>
     <?php endif; ?>
 </div>
 <?php endif; ?>

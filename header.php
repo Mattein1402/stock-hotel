@@ -3,10 +3,11 @@ $u = usuario();
 $pagina = basename($_SERVER['PHP_SELF']);
 $links = [
     'index.php' => ['Inicio', false],
-    'cocinar.php' => ['Cocinar', false],
+    'contingentes.php' => ['Contingentes', false],
+    'menus.php' => ['Menú', false],
+    'platos.php' => ['Platos', false],
     'productos.php' => ['Stock', false],
     'compras.php' => ['Compras', true],
-    'menus.php' => ['Menús', true],
     'movimientos.php' => ['Movimientos', false],
     'usuarios.php' => ['Usuarios', true],
 ];

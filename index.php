@@ -19,12 +19,18 @@ $hechas = $st->fetchAll(PDO::FETCH_KEY_PAIR);
 
 // Comidas del día que tienen platos en el menú
 $comidasHoy = [];
+$paxComida = [];
 foreach (SERVICIOS as $sv) {
-    $pl = platos_del_menu($pdo, $diaMenu, $sv);
-    if ($pl) $comidasHoy[$sv] = $pl;
+    $act = contingentes_activos($pdo, $hoy, $sv);
+    [$dSv] = dia_menu_sugerido($act);
+    $pl = $act ? platos_del_menu($pdo, $dSv, $sv) : [];
+    if ($pl) {
+        $comidasHoy[$sv] = $pl;
+        $paxComida[$sv] = array_sum(array_column($act, 'personas'));
+    }
 }
 
-$bajos = $pdo->query('SELECT * FROM productos WHERE activo = 1 AND stock <= stock_minimo ORDER BY (stock - stock_minimo), nombre')->fetchAll();
+$bajos = $pdo->query('SELECT * FROM productos WHERE activo = 1 AND ((stock_minimo > 0 AND stock <= stock_minimo) OR stock < 0) ORDER BY (stock - stock_minimo), nombre')->fetchAll();
 $mes = date('Y-m-01');
 $st = $pdo->prepare('SELECT COALESCE(SUM(comensales), 0) AS pax, COALESCE(SUM(costo_total), 0) AS costo FROM servicios WHERE anulado = 0 AND fecha >= ?');
 $st->execute([$mes]);
@@ -32,15 +38,30 @@ $serv = $st->fetch();
 $valor = (float)$pdo->query('SELECT COALESCE(SUM(GREATEST(stock, 0) * costo_promedio), 0) FROM productos WHERE activo = 1')->fetchColumn();
 $sinReceta = (int)$pdo->query('SELECT COUNT(DISTINCT p.id) FROM platos p JOIN menu_ciclo mc ON mc.plato_id = p.id WHERE NOT EXISTS (SELECT 1 FROM plato_items pi WHERE pi.plato_id = p.id)')->fetchColumn();
 
+// Planificador de un contingente nuevo (desde el formulario del inicio)
+$planificando = es_admin() && !empty($_GET['planificar']);
+if ($planificando) {
+    require_once __DIR__ . '/inc/planificador.php';
+    $plan = plan_desde_datos($pdo, $_GET, null);
+}
+
 $titulo = 'Inicio';
 require __DIR__ . '/inc/header.php';
 ?>
+<?php if ($planificando): ?>
+<div class="titulo-acciones no-print" id="plan">
+    <h1>Nuevo contingente</h1>
+    <a class="btn sec" href="index.php">Cancelar</a>
+</div>
+<?php render_planificador($pdo, $plan, 'index.php', ['planificar' => 1], 'index.php'); ?>
+<?php else: ?>
+<div>
 <h1>Hoy, <?= fecha_ar($hoy) ?></h1>
 
 <div class="stats">
     <div class="stat destacado"><span>Personas en el hotel</span><strong><?= $paxHoy ?></strong></div>
     <div class="stat"><span>Contingentes</span><strong><?= count($activos) ?></strong></div>
-    <div class="stat"><span>Menú de hoy</span><strong><?= $activos ? 'Día ' . $diaMenu : '—' ?></strong></div>
+    <div class="stat"><span>Menú de hoy</span><strong><?= $comidasHoy ? 'Menú ' . $diaMenu : '—' ?></strong></div>
     <div class="stat <?= $bajos ? 'alerta' : '' ?>"><span>Productos para reponer</span><strong><?= count($bajos) ?></strong></div>
 </div>
 
@@ -79,39 +100,32 @@ require __DIR__ . '/inc/header.php';
         <p><a href="contingentes.php">Ver todos los contingentes →</a></p>
     </section>
 
-    <?php if (es_admin()):
-        $c = ['numero' => '', 'fecha_llegada' => $hoy, 'dias' => 7, 'personas' => '', 'observaciones' => '']; ?>
+    <?php if (es_admin() && !$planificando):
+        $c = ['numero' => '', 'personas' => '', 'fecha_llegada' => $hoy,
+              'fecha_salida' => date('Y-m-d', strtotime('+2 days')), 'observaciones' => '']; ?>
     <section class="card">
-        <h2>Cargar contingente</h2>
-        <form method="post" action="contingentes.php">
-            <?= csrf_field() ?>
-            <input type="hidden" name="accion" value="guardar">
-            <input type="hidden" name="volver" value="index.php">
-            <?php include __DIR__ . '/inc/form_contingente.php'; ?>
-            <button class="btn">Guardar contingente</button>
+        <h2>Nuevo contingente</h2>
+        <form method="get" action="index.php#plan">
+            <input type="hidden" name="planificar" value="1">
+            <input type="hidden" name="armado" value="1">
+            <?php $autofocus = false; include __DIR__ . '/inc/form_contingente.php'; ?>
+            <button class="btn">Elegir menús y calcular materia prima →</button>
         </form>
     </section>
     <?php endif; ?>
 </div>
 
 <section class="card">
-    <div class="titulo-acciones">
-        <h2 style="margin:0">Comidas de hoy <?= $activos ? '<span class="muted small">· menú del día ' . $diaMenu . '</span>' : '' ?></h2>
-    </div>
-    <?php if ($activos): ?><p class="muted small"><?= e($explicacion) ?></p><?php endif; ?>
+    <h2>Menú de hoy</h2>
     <?php if (!$comidasHoy): ?>
-        <p class="muted">No hay platos cargados para este día del menú.</p>
+        <p class="muted">Hoy no hay contingentes con menú en el hotel.</p>
     <?php else: ?>
+    <p class="muted small"><?= e($explicacion) ?> Ya está descontado del stock (se descuenta al confirmar el contingente).</p>
     <div class="comidas-hoy">
         <?php foreach ($comidasHoy as $sv => $pl): ?>
             <div class="comida">
-                <h3><?= $sv ?></h3>
+                <h3><?= $sv ?> <?= !empty($paxComida[$sv]) ? '<span class="muted small">· ' . (int)$paxComida[$sv] . ' personas</span>' : '' ?></h3>
                 <ul><?php foreach ($pl as $p): ?><li><?= e($p['nombre']) ?><?= !$p['ingredientes'] ? ' <span class="badge b-warn">Sin receta</span>' : '' ?></li><?php endforeach; ?></ul>
-                <?php if (isset($hechas[$sv])): ?>
-                    <span class="badge b-ok">✔ Registrado (<?= (int)$hechas[$sv] ?> pax)</span>
-                <?php elseif ($paxHoy): ?>
-                    <a class="btn" href="cocinar.php?fecha=<?= $hoy ?>&servicio=<?= urlencode($sv) ?>">Cocinar <?= mb_strtolower($sv) ?> para <?= $paxHoy ?></a>
-                <?php endif; ?>
             </div>
         <?php endforeach; ?>
     </div>
@@ -145,4 +159,6 @@ require __DIR__ . '/inc/header.php';
         <p><a href="movimientos.php">Ver movimientos →</a></p>
     </section>
 </div>
+</div>
+<?php endif; ?>
 <?php require __DIR__ . '/inc/footer.php'; ?>

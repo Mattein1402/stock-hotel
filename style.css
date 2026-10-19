@@ -109,13 +109,84 @@ ul.detalle { margin: .4rem 0; padding-left: 1.1rem; font-size: .9rem; }
 .stat strong { font-size: 1.35rem; }
 .stat.alerta { background: var(--warn); border-color: #f1d892; }
 
+/* Contingentes / cocinar / menú */
+h3 { font-size: .95rem; margin: .8rem 0 .4rem; }
+.stat.destacado { background: var(--pri); border-color: var(--pri); color: #fff; }
+.stat.destacado span { color: #d8eadf; }
+.tabs { display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.tabs a { padding: .4rem .8rem; border-radius: 99px; background: #e8ece8; color: var(--txt); text-decoration: none; font-size: .9rem; }
+.tabs a.activo { background: var(--pri); color: #fff; }
+.tabla-pax td { vertical-align: middle; }
+.tabla-pax input[type=number] { margin: 0; }
+.tabla-pax input[type=checkbox] { width: 20px; height: 20px; margin: 0; }
+.total-pax { align-self: center; font-size: 1.15rem; padding: .6rem .9rem; background: var(--info); color: var(--info-t); border-radius: 8px; }
+.total-pax strong { font-size: 1.4rem; }
+.platos-check { list-style: none; padding: 0; margin: 0 0 .5rem; display: grid; gap: .3rem; }
+.platos-check label { margin: 0; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.platos-check input { width: 18px; height: 18px; flex: none; }
+.servicios-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), 1fr); gap: 1rem; }
+.servicio-col h3 { margin-top: 0; padding-bottom: .3rem; border-bottom: 2px solid var(--line); }
+.lista-platos { list-style: none; padding: 0; margin: 0 0 .5rem; }
+.lista-platos li { display: flex; justify-content: space-between; align-items: center; gap: .4rem; padding: .3rem 0; border-bottom: 1px dashed var(--line); }
+.mini-acciones { display: flex; gap: .2rem; flex: none; }
+.mini-acciones .btn-x { width: 28px; height: 28px; margin: 0; }
+.agregar-plato select { font-size: .9rem; padding: .4rem; }
+.dia-menu h2 { color: var(--pri); }
+.comidas-hoy { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: .6rem; }
+.comida { border: 1px solid var(--line); border-radius: 8px; padding: .8rem; }
+.comida h3 { margin-top: 0; }
+.comida ul { padding-left: 1.1rem; margin: 0 0 .7rem; }
+
+/* Planificador de estadía */
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem 0; margin: 0 0 .8rem; min-width: 0; }
+legend { font-weight: 600; font-size: .9rem; padding: 0 .3rem; color: var(--pri); }
+.tabla-plan td { vertical-align: middle; }
+.tabla-plan select { margin: 0; padding: .4rem; }
+.tabla-plan select.cambiado { border-color: #d8a400; background: var(--warn); }
+.tabla-plan tr.fila-nueva-fecha td { border-top: 2px solid var(--line); }
+.fila-categoria td { background: #f0f3ef; font-weight: 600; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.separador { border: 0; border-top: 2px dashed var(--line); margin: 2rem 0; }
+.stat .small { display: block; color: var(--muted); }
+.aviso { color: var(--warn-t); font-weight: 600; }
+.solo-print { display: none; }
+@media print {
+    .top, .no-print, .flash, .btn, .btn-x, #plan-form, form[method=post] { display: none !important; }
+    body { background: #fff; }
+    .card { border: 0; padding: 0; }
+    .solo-print { display: block; font-weight: 600; }
+    .imprimible .stats { grid-template-columns: repeat(5, 1fr); }
+    .badge { border: 1px solid #999; }
+}
+
+/* Menús para tildar */
+.menus-opciones { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .8rem; margin: .6rem 0 1rem; }
+.menu-opcion { display: block; border: 2px solid var(--line); border-radius: 10px; padding: 0; margin: 0; cursor: pointer; font-weight: 400; overflow: hidden; background: #fff; }
+.menu-opcion:hover { border-color: #9cc7b1; }
+.menu-opcion.marcado { border-color: var(--pri); box-shadow: 0 0 0 3px #d6eadf; }
+.menu-opcion-titulo { display: flex; align-items: center; gap: .6rem; padding: .7rem .8rem; background: #1f2622; color: #fff; }
+.menu-opcion.marcado .menu-opcion-titulo { background: var(--pri); }
+.menu-opcion-titulo input { width: 22px; height: 22px; margin: 0; flex: none; }
+.menu-opcion-titulo strong { font-size: 1.1rem; letter-spacing: .03em; flex: 1; }
+.menu-opcion-titulo .muted { color: #cfe3d7; }
+.menu-opcion-servicio { background: #eef0ed; text-align: center; font-weight: 700; font-size: .8rem; letter-spacing: .05em; padding: .3rem; margin-top: .4rem; }
+.menu-opcion ul { list-style: none; margin: .3rem 0 .5rem; padding: 0 .8rem; font-size: .9rem; }
+.menu-opcion li { padding: .15rem 0; }
+.chip-vacio { background: #eceeec; color: var(--muted); }
+
+.fila-hoy td { background: #f2f8f4; }
+#dias form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .2rem 0; }
+#dias .check { margin: 0; }
+
 /* Celular */
 @media (max-width: 760px) {
     .menu-toggle { display: block; }
     .top nav { display: none; flex-basis: 100%; flex-direction: column; }
     body.nav-open .top nav { display: flex; }
     .top nav .salir { margin-left: 0; }
-    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .grid-2, .grid-3, .servicios-grid { grid-template-columns: 1fr; }
+    .tabla-pax th, .tabla-pax td { padding: .45rem .2rem; }
+    .tabla-pax th:last-child { width: 72px !important; }
+    .tabla-pax input[type=number] { padding: .45rem .3rem; }
     .titulo-acciones .btn { width: 100%; text-align: center; margin-top: .3rem; }
     .acciones .btn { flex: 1 1 100%; text-align: center; }
     .tabla-form thead { display: none; }

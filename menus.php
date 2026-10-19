@@ -22,6 +22,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($acc === 'quitar') {
         $pdo->prepare('DELETE FROM menu_ciclo WHERE id = ?')->execute([(int)($_POST['id'] ?? 0)]);
     }
+    if ($acc === 'vaciar') {
+        // Deja el ciclo en blanco y oculta los platos sin receta (no se borra nada: se puede restaurar)
+        $pdo->beginTransaction();
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM menu_ciclo')->fetchColumn();
+        $pdo->exec('DELETE FROM menu_ciclo');
+        $ocultos = $pdo->exec('UPDATE platos p SET p.activo = 0 WHERE p.activo = 1 AND NOT EXISTS (SELECT 1 FROM plato_items pi WHERE pi.plato_id = p.id)');
+        $pdo->commit();
+        flash('Menú vaciado (' . $n . ' platos quitados del ciclo). Se ocultaron ' . (int)$ocultos . ' platos sin receta. Ahora armá los días con los platos que se van a cocinar.');
+        redirect('menus.php');
+    }
+    if ($acc === 'cargar_3') {
+        require_once __DIR__ . '/inc/menu_inicial.php';
+        require_once __DIR__ . '/inc/recetas_iniciales.php';
+        $pdo->beginTransaction();
+        cargar_recetas_iniciales($pdo); // por si falta alguna receta de las fichas (no pisa las que hay)
+        $pdo->exec('DELETE FROM menu_ciclo');
+        $pdo->exec('UPDATE platos p SET p.activo = 0 WHERE p.activo = 1 AND NOT EXISTS (SELECT 1 FROM plato_items pi WHERE pi.plato_id = p.id)');
+        cargar_menu($pdo, menu_3_dias());
+        $pdo->commit();
+        flash('Se cargaron los Menús 1, 2 y 3 (almuerzo y cena). El ciclo ahora es de 3 días.');
+        redirect('menus.php');
+    }
+    if ($acc === 'restaurar') {
+        require_once __DIR__ . '/inc/menu_inicial.php';
+        $pdo->beginTransaction();
+        $nombres = [];
+        foreach (menu_inicial() as $servs) foreach ($servs as $pls) foreach ($pls as [$nom]) $nombres[] = $nom;
+        $in = implode(',', array_fill(0, count($nombres), '?'));
+        $pdo->prepare("UPDATE platos SET activo = 1 WHERE nombre IN ($in)")->execute($nombres);
+        $pdo->exec('DELETE FROM menu_ciclo');
+        cargar_menu_inicial($pdo);
+        $pdo->commit();
+        flash('Se volvió a cargar el Menú 2025/2026 (10 días, almuerzo y cena).');
+        redirect('menus.php');
+    }
     if ($acc === 'mover') {
         // Sube un plato un lugar dentro de su comida
         $id = (int)($_POST['id'] ?? 0);
@@ -76,16 +111,43 @@ $titulo = 'Menú';
 require __DIR__ . '/inc/header.php';
 ?>
 <div class="titulo-acciones">
-    <h1>Menú — ciclo de <?= CICLO_DIAS ?> días</h1>
+    <h1>Menú <span class="muted small">· ciclo de <?= $rows ? ciclo_largo() : 0 ?> día(s)</span></h1>
     <?php if (es_admin()): ?><a class="btn sec" href="platos.php">Platos y recetas</a><?php endif; ?>
 </div>
-<p class="muted">El día 1 del ciclo corresponde al día de llegada del contingente. Si se quedan más de <?= CICLO_DIAS ?> días, el ciclo vuelve a empezar.
+<p class="muted">El Menú 1 corresponde al día de llegada del contingente, el 2 al segundo día, y así. Si se quedan más días que los menús cargados, vuelve a empezar desde el 1.
 <?php if (es_admin() && count($mostrar) < count(SERVICIOS)): ?> <a href="menus.php?todas=1">Mostrar también desayuno y merienda</a><?php endif; ?></p>
 
-<?php for ($dia = 0; $dia <= CICLO_DIAS; $dia++):
+<?php if (es_admin()): ?>
+<details class="card herramientas" <?= $rows ? '' : 'open' ?>>
+    <summary><strong>Empezar de cero / restaurar</strong> <span class="muted small">— para armar el menú de un contingente puntual</span></summary>
+    <div class="grid-3" style="margin-top:.8rem">
+        <form method="post" data-confirm="¿Vaciar el menú? Se quitan todos los platos de los 10 días y se ocultan los platos que no tienen receta. Las recetas, el stock y los contingentes no se tocan, y el Menú 2025/2026 se puede volver a cargar con «Restaurar».">
+            <?= csrf_field() ?><input type="hidden" name="accion" value="vaciar">
+            <p class="small">Deja los 10 días en blanco y oculta los platos sin receta. Quedan para elegir solo los platos con receta.</p>
+            <button class="btn peligro">Vaciar menú</button>
+        </form>
+        <form method="post" data-confirm="¿Cargar los Menús 1, 2 y 3? Reemplaza lo que haya ahora en el ciclo por los 3 menús del contingente.">
+            <?= csrf_field() ?><input type="hidden" name="accion" value="cargar_3">
+            <p class="small"><strong>Menús 1, 2 y 3</strong> (contingente de 3 días): los platos de las fichas de cocina, con sus recetas.</p>
+            <button class="btn">Cargar Menús 1, 2 y 3</button>
+        </form>
+        <form method="post" data-confirm="¿Restaurar el Menú 2025/2026? Reemplaza lo que haya ahora en los 10 días por el menú original de la foto.">
+            <?= csrf_field() ?><input type="hidden" name="accion" value="restaurar">
+            <p class="small">Vuelve a cargar el Menú 2025/2026 de la foto (10 días, almuerzo y cena), reemplazando lo que haya ahora.</p>
+            <button class="btn sec">Restaurar menú 2025/2026</button>
+        </form>
+    </div>
+</details>
+<?php endif; ?>
+<?php if (!$rows): ?>
+    <div class="flash warn">El menú está vacío. Para cada día de la estadía, elegí en «+ Agregar plato…» los platos del almuerzo y de la cena. Ej.: contingente de 3 días → armá los días 1, 2 y 3.</div>
+<?php endif; ?>
+
+<?php $hasta = (!empty($_GET['todas']) || !$rows) ? CICLO_DIAS : min(CICLO_DIAS, ciclo_largo() + 1);
+for ($dia = 0; $dia <= $hasta; $dia++):
     if ($dia === 0 && empty($celdas[0]) && empty($_GET['todas'])) continue; ?>
 <section class="card dia-menu" id="dia<?= $dia ?>">
-    <h2><?= $dia === 0 ? 'Todos los días <span class="muted small">(platos fijos, ej. desayuno)</span>' : 'Día ' . $dia ?></h2>
+    <h2><?= $dia === 0 ? 'Todos los días <span class="muted small">(platos fijos, ej. desayuno)</span>' : 'Menú ' . $dia . ' <span class="muted small">· día ' . $dia . ' de estadía</span>' ?></h2>
     <div class="servicios-grid" style="--cols: <?= count($mostrar) ?>">
     <?php foreach ($mostrar as $sv):
         $items = $celdas[$dia][$sv] ?? [];
@@ -123,4 +185,5 @@ require __DIR__ . '/inc/header.php';
     </div>
 </section>
 <?php endfor; ?>
+<?php if ($hasta < CICLO_DIAS && es_admin()): ?><p><a href="menus.php?todas=1">Ver los <?= CICLO_DIAS ?> días</a></p><?php endif; ?>
 <?php require __DIR__ . '/inc/footer.php'; ?>
